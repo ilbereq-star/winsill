@@ -88,26 +88,32 @@ export function startServers({
         send(ws, { type: "snapshot", sessions: hub.snapshot(), focusedId: hub.focusedId });
       },
       async message(ws, raw) {
-        const msg = parseClientMessage(String(raw));
-        if (!msg) return send(ws, { type: "error", message: "invalid message" });
-        if (msg.type === "library") return send(ws, { type: "library", sessions: await library() });
-        if (!hub.has(msg.id) && msg.type !== "open") await adoptFromDesktop(msg.id);
-        if (!hub.has(msg.id)) return send(ws, { type: "error", message: "unknown session" });
+        // An async handler's rejection is unhandled and kills the agent: answer it instead.
+        try {
+          const msg = parseClientMessage(String(raw));
+          if (!msg) return send(ws, { type: "error", message: "invalid message" });
+          if (msg.type === "library") return send(ws, { type: "library", sessions: await library() });
+          if (!hub.has(msg.id) && msg.type !== "open") await adoptFromDesktop(msg.id);
+          if (!hub.has(msg.id)) return send(ws, { type: "error", message: "unknown session" });
 
-        switch (msg.type) {
-          case "open": {
-            const result = await open(msg.id);
-            // The desktop log confirms focus a moment later; show it right away.
-            if (result.ok) hub.setFocused(msg.id);
-            else send(ws, { type: "error", message: result.error });
-            break;
+          switch (msg.type) {
+            case "open": {
+              const result = await open(msg.id);
+              // The desktop log confirms focus a moment later; show it right away.
+              if (result.ok) hub.setFocused(msg.id);
+              else send(ws, { type: "error", message: result.error });
+              break;
+            }
+            case "pin":
+              hub.setPinned(msg.id, msg.pinned);
+              break;
+            case "icon":
+              hub.setIcon(msg.id, msg.icon);
+              break;
           }
-          case "pin":
-            hub.setPinned(msg.id, msg.pinned);
-            break;
-          case "icon":
-            hub.setIcon(msg.id, msg.icon);
-            break;
+        } catch (error) {
+          console.error(`panel message failed: ${error instanceof Error ? error.message : String(error)}`);
+          send(ws, { type: "error", message: "internal error" }); // details stay in the log, off the network port
         }
       },
       close(ws) {

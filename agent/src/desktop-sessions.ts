@@ -22,7 +22,7 @@ export interface DesktopSession {
 /** Every desktop session, most recently active first. */
 export async function listDesktopSessions(dir = DESKTOP_SESSIONS_DIR): Promise<DesktopSession[]> {
   const sessions: DesktopSession[] = [];
-  for await (const path of new Bun.Glob("*/*/local_*.json").scan({ cwd: dir, absolute: true })) {
+  for await (const path of scan("*/*/local_*.json", dir)) {
     const session = parse(await Bun.file(path).json().catch(() => null));
     if (session) sessions.push(session);
   }
@@ -35,11 +35,20 @@ export async function findDesktopSession(sessionId: string, dir = DESKTOP_SESSIO
 
 /** CLI session id of a desktop `local_…` session. */
 export async function cliSessionIdFor(localId: string, dir = DESKTOP_SESSIONS_DIR): Promise<string | null> {
-  for await (const path of new Bun.Glob(`*/*/${localId}.json`).scan({ cwd: dir, absolute: true })) {
+  for await (const path of scan(`*/*/${localId}.json`, dir)) {
     const session = parse(await Bun.file(path).json().catch(() => null));
     if (session) return session.sessionId;
   }
   return null;
+}
+
+/** Files matching `pattern` under `dir`. A missing dir (no desktop app) has none. */
+async function* scan(pattern: string, dir: string) {
+  try {
+    yield* new Bun.Glob(pattern).scan({ cwd: dir, absolute: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+  }
 }
 
 function parse(meta: Record<string, unknown> | null): DesktopSession | null {

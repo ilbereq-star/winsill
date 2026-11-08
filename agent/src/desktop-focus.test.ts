@@ -58,6 +58,19 @@ describe("desktop sessions", () => {
     ]);
     expect(await findDesktopSession(CLI_A, sessionsDir)).toMatchObject({ title: "Panel", cwd: "/Users/dev/panel" });
   });
+
+  test("a missing sessions dir, as without the desktop app, means no desktop sessions", async () => {
+    const missing = `${dir}/missing`;
+    expect(await listDesktopSessions(missing)).toEqual([]);
+    expect(await findDesktopSession(CLI_A, missing)).toBeUndefined();
+    expect(await cliSessionIdFor(LOCAL_A, missing)).toBeNull();
+  });
+
+  test("any other failure to read the sessions dir still throws", async () => {
+    writeFileSync(log, ""); // a file, so scanning it as a dir fails with ENOTDIR
+    await expect(listDesktopSessions(log)).rejects.toThrow("ENOTDIR");
+    await expect(cliSessionIdFor(LOCAL_A, log)).rejects.toThrow("ENOTDIR");
+  });
 });
 
 test("watchDesktopFocus follows switches, skips the transient null and survives rotation", async () => {

@@ -19,9 +19,11 @@ const DESKTOP: DesktopSession[] = [
 
 let servers: ReturnType<typeof startServers>;
 let opened: string[];
+let desktopSessions: () => Promise<DesktopSession[]>;
 
 beforeEach(() => {
   opened = [];
+  desktopSessions = async () => DESKTOP;
   servers = startServers({
     hub: new SessionHub(new Store()),
     token: TOKEN,
@@ -32,7 +34,7 @@ beforeEach(() => {
       opened.push(id);
       return { ok: true, command: ["fake-open", id] };
     },
-    desktopSessions: async () => DESKTOP,
+    desktopSessions: () => desktopSessions(),
   });
 });
 afterEach(() => servers.stop());
@@ -135,6 +137,22 @@ test("the library lists desktop sessions, and pinning one that isn't running ado
 
   ws.send(JSON.stringify({ type: "library" }));
   expect(await next()).toMatchObject({ type: "library", sessions: [{ id: IDLE, pinned: true }] });
+  ws.close();
+});
+
+test("a message that fails is answered with an error, and the server keeps serving", async () => {
+  const { ws, next } = await connect();
+  await next(); // snapshot
+
+  desktopSessions = async () => {
+    throw new Error("disk on fire");
+  };
+  ws.send(JSON.stringify({ type: "library" }));
+  expect(await next()).toEqual({ type: "error", message: "internal error" });
+
+  desktopSessions = async () => DESKTOP;
+  ws.send(JSON.stringify({ type: "library" }));
+  expect(await next()).toMatchObject({ type: "library", sessions: [{ id: IDLE }] });
   ws.close();
 });
 
