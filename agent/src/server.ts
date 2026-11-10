@@ -5,19 +5,23 @@
  */
 import { timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
-import type { LibraryEntry, ServerMessage } from "../../shared/protocol.ts";
+import { PROTOCOL_VERSION, type LibraryEntry, type ServerMessage } from "../../shared/protocol.ts";
 import { listDesktopSessions, type DesktopSession } from "./desktop-sessions.ts";
 import type { SessionHub } from "./hub.ts";
+import { log } from "./log.ts";
 import { openSession, type OpenResult } from "./open-session.ts";
-import { parseClientMessage } from "./protocol-guard.ts";
-import type { HookEvent } from "./state.ts";
+import { parseClientMessage, parseHookEvent } from "./protocol-guard.ts";
 
 export interface ServerOptions {
   hub: SessionHub;
   token: string;
+  /** What a hook must send as `Authorization: Bearer …`. */
+  hookToken: string;
   hookPort: number;
   panelPort: number;
   panelHost?: string;
+  /** The agent's version, for the hello. */
+  version?: string;
   /** Replaceable so tests don't open real sessions or read the real desktop app. */
   open?: (id: string) => Promise<OpenResult>;
   desktopSessions?: () => Promise<DesktopSession[]>;
@@ -25,13 +29,17 @@ export interface ServerOptions {
 
 const TOPIC = "panel";
 const LIBRARY_SIZE = 100;
+/** A hook event carries the tool's input and output, which can be a whole file. */
+const MAX_HOOK_BYTES = 16 * 1024 * 1024;
 
 export function startServers({
   hub,
   token,
+  hookToken,
   hookPort,
   panelPort,
   panelHost = "127.0.0.1",
+  version = "dev",
   open = openSession,
   desktopSessions = () => listDesktopSessions(),
 }: ServerOptions) {
@@ -57,15 +65,19 @@ export function startServers({
   const hookServer = Bun.serve({
     hostname: "127.0.0.1",
     port: hookPort,
-    async fetch(req) {
+    maxRequestBodySize: MAX_HOOK_BYTES,
+    async fetch(req, server) {
       const { pathname } = new URL(req.url);
       if (req.method !== "POST" || pathname !== "/hook") return new Response("not found", { status: 404 });
-      try {
-        const event = (await req.json()) as HookEvent;
-        if (typeof event?.session_id === "string" && typeof event.hook_event_name === "string") hub.handleHook(event);
-      } catch {
-        return new Response("bad json", { status: 400 });
-      }
+      // Loopback is not private: any web page can make the browser post here. A page can't send
+      // this Host (its own name would be there), nor the token, nor JSON without asking first.
+      if (!isLoopback(req.headers.get("host"), server.port)) return new Response("forbidden", { status: 403 });
+      if (!sameSecret(bearer(req.headers.get("authorization")), hookToken)) return new Response("unauthorized", { status: 401 });
+      if (!isJson(req.headers.get("content-type"))) return new Response("expected application/json", { status: 415 });
+
+      const event = parseHookEvent(await req.json().catch(() => null));
+      if (!event) return new Response("bad event", { status: 400 });
+      hub.handleHook(event);
       return new Response(null, { status: 204 }); // an empty 2xx tells Claude Code "no decision"
     },
   });
@@ -85,6 +97,7 @@ export function startServers({
       maxPayloadLength: 4 * 1024,
       open(ws) {
         ws.subscribe(TOPIC);
+        send(ws, { type: "hello", protocol: PROTOCOL_VERSION, agent: version });
         send(ws, { type: "snapshot", sessions: hub.snapshot(), focusedId: hub.focusedId });
       },
       async message(ws, raw) {
@@ -99,7 +112,7 @@ export function startServers({
           switch (msg.type) {
             case "open": {
               const result = await open(msg.id);
-              // The desktop log confirms focus a moment later; show it right away.
+              // The desktop app confirms focus a moment later; show it right away.
               if (result.ok) hub.setFocused(msg.id);
               else send(ws, { type: "error", message: result.error });
               break;
@@ -112,7 +125,7 @@ export function startServers({
               break;
           }
         } catch (error) {
-          console.error(`panel message failed: ${error instanceof Error ? error.message : String(error)}`);
+          log.error(`panel message failed: ${error instanceof Error ? error.message : String(error)}`);
           send(ws, { type: "error", message: "internal error" }); // details stay in the log, off the network port
         }
       },
@@ -145,4 +158,16 @@ function sameSecret(given: string | null, expected: string) {
   const a = Buffer.from(given);
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function bearer(authorization: string | null) {
+  return authorization?.match(/^Bearer (.+)$/)?.[1] ?? null;
+}
+
+function isLoopback(host: string | null, port: number | undefined) {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+}
+
+function isJson(contentType: string | null) {
+  return contentType?.split(";")[0]!.trim().toLowerCase() === "application/json";
 }

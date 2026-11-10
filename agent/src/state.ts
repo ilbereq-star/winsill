@@ -1,9 +1,9 @@
 /**
  * Session state machine. Pure: no I/O, and callers pass the clock.
  *
- * Hook events are the authority: instant and detailed. Polls of `claude agents --json`
- * only correct state that has gone stale (no hook for GRACE_MS), and are the only
- * reliable signal that a session process has died.
+ * Hook events are the authority: instant and detailed. Polls of the running sessions (their
+ * files, or `claude agents --json`) only correct state that has gone stale (no hook for
+ * GRACE_MS), and are the only reliable signal that a session process has died.
  */
 import { basename } from "node:path";
 import type { SessionState } from "../../shared/protocol.ts";
@@ -86,12 +86,16 @@ export function applyHookEvent(prev: SessionRecord | undefined, e: HookEvent, no
       switch (e.notification_type) {
         case "permission_prompt":
           return to("needs_permission", oneLine(e.message) || "Needs your permission");
-        case "elicitation_dialog":
+        case "elicitation_dialog": // an MCP server shows a form
+        case "elicitation_url_dialog": // or asks to open a page in the browser
         case "agent_needs_input":
           return to("needs_input", oneLine(e.message) || "Waiting for you");
+        case "elicitation_response": // the form was answered
+        case "elicitation_complete": // the page in the browser was dealt with
+          return rec.state === "needs_input" ? to("working", null) : rec;
         case "idle_prompt": // still "working" here means the Stop was missed
           return rec.state === "working" || rec.state === "idle" ? to("done", null) : rec;
-        default:
+        default: // among them agent_completed, which speaks of another session: the background one that finished
           return rec;
       }
 
@@ -178,8 +182,10 @@ function reconcileOne(prev: SessionRecord | undefined, agent: AgentEntry, now: n
   // Hooks have gone quiet: correct only clear contradictions. Busy doesn't wake a finished turn
   // (done or error): a background task keeps the poll at busy after the turn ends, and the
   // Stop or StopFailure hook is authoritative. It still clears idle and a stale prompt (needs_*).
+  // A session no hook ever spoke for (hooks not installed) has only the poll to go by, so there
+  // busy does mean a new turn.
   const { state } = rec;
-  const finished = state === "done" || state === "error";
+  const finished = (state === "done" || state === "error") && prev.lastEventAt > 0;
   if (agent.status === "idle" && (state === "working" || state === "compacting")) return moveTo(rec, "done", null, now);
   if (agent.status === "busy" && state !== "working" && state !== "compacting" && !finished) return moveTo(rec, "working", null, now);
   if (agent.status === "waiting" && state === "working") return moveTo(rec, "needs_input", "Waiting for you", now);

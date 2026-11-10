@@ -106,10 +106,10 @@ export class SessionHub {
   private commit(next: SessionRecord) {
     const prev = this.records.get(next.id);
     this.records.set(next.id, next);
-    this.store.saveSession(next);
-    if (!prev || VISIBLE.some((k) => prev[k] !== next[k])) {
-      this.emit({ type: "session", session: this.toPanel(next) });
-    }
+    const visible = !prev || VISIBLE.some((k) => prev[k] !== next[k]);
+    // Most hook events only move lastEventAt, which is of no use after a restart: not worth a write.
+    if (visible || prev?.pid !== next.pid) this.store.saveSession(next);
+    if (visible) this.emit({ type: "session", session: this.toPanel(next) });
   }
 
   private emit(change: HubChange) {

@@ -1,5 +1,6 @@
 import { runAgent } from "./agent.ts";
 import { parseCommand, USAGE } from "./cli.ts";
+import { doctor } from "./doctor.ts";
 import { setup, uninstall } from "./install.ts";
 import { platform } from "./platform/index.ts";
 import { status } from "./status.ts";
@@ -11,13 +12,16 @@ const command = parseCommand(process.argv.slice(2));
 try {
   switch (command.name) {
     case "agent":
-      await runAgent({ lan: command.lan });
+      await runAgent({ lan: command.lan, version: VERSION });
       break;
     case "setup":
       await setup({ pi: command.pi });
       break;
     case "status":
       await status(VERSION);
+      break;
+    case "doctor":
+      await doctor(VERSION);
       break;
     case "uninstall":
       await uninstall({ purge: command.purge });

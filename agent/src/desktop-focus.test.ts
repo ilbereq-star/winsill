@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { lastFocus, watchDesktopFocus } from "./desktop-focus.ts";
+import { lastFocus, watchDesktopFocus, watchLastFocused } from "./desktop-focus.ts";
 import { cliSessionIdFor, desktopDataDir, findDesktopSession, listDesktopSessions } from "./desktop-sessions.ts";
 
 const LOCAL_A = "local_52223c18-ba45-4a92-9290-45eb61d71d5d";
@@ -134,4 +134,62 @@ test("a null that lasts means nothing is in front", async () => {
   } finally {
     stop();
   }
+});
+
+describe("watchLastFocused, for when the log says nothing", () => {
+  const focusedAt = (local: string, cli: string, at?: number) =>
+    writeFileSync(`${sessionsDir}/account/org/${local}.json`, JSON.stringify({ sessionId: local, cliSessionId: cli, lastFocusedAt: at }));
+
+  test("reports the session focused last, and again when another one takes over", async () => {
+    focusedAt(LOCAL_A, CLI_A, 5000);
+    focusedAt(LOCAL_B, CLI_B, 4000);
+    const seen: [string | null, number][] = [];
+    const stop = watchLastFocused((id, at) => seen.push([id, at]), { sessionsDir, pollMs: 60_000 }); // no timer in sight: only change notifications
+    try {
+      await waitFor(() => seen.length === 1);
+      focusedAt(LOCAL_B, CLI_B, 6000);
+      await waitFor(() => seen.length === 2);
+      expect(seen).toEqual([
+        [CLI_A, 5000],
+        [CLI_B, 6000],
+      ]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("a session written again while it stays in front is not reported twice", async () => {
+    focusedAt(LOCAL_A, CLI_A, 5000);
+    const seen: (string | null)[] = [];
+    const stop = watchLastFocused((id) => seen.push(id), { sessionsDir, pollMs: 20 });
+    try {
+      await waitFor(() => seen.length === 1);
+      focusedAt(LOCAL_A, CLI_A, 5500); // the app rewrites the file on every activity
+      await Bun.sleep(150);
+      expect(seen).toEqual([CLI_A]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("sessions that don't say when they were focused report nothing", async () => {
+    const seen: (string | null)[] = [];
+    const stop = watchLastFocused((id) => seen.push(id), { sessionsDir, pollMs: 20 });
+    await Bun.sleep(150);
+    stop();
+    expect(seen).toEqual([]);
+  });
+});
+
+test("a session file that changes or goes away is read again, not remembered", async () => {
+  const file = `${sessionsDir}/account/org/${LOCAL_A}.json`;
+  expect((await findDesktopSession(CLI_A, sessionsDir))!.title).toBe("Panel");
+
+  writeFileSync(file, JSON.stringify({ sessionId: LOCAL_A, cliSessionId: CLI_A, title: "Renamed panel" }));
+  expect((await findDesktopSession(CLI_A, sessionsDir))!.title).toBe("Renamed panel");
+  expect(await cliSessionIdFor(LOCAL_A, sessionsDir)).toBe(CLI_A);
+
+  rmSync(file);
+  expect(await findDesktopSession(CLI_A, sessionsDir)).toBeUndefined();
+  expect(await cliSessionIdFor(LOCAL_A, sessionsDir)).toBeNull();
 });

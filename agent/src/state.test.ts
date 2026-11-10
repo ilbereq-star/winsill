@@ -67,6 +67,26 @@ describe("applyHookEvent", () => {
     expect(run([ev("PreToolUse", { tool_name: "ExitPlanMode", tool_input: {} })]).state).toBe("needs_input");
   });
 
+  test("an MCP server asking for a form or a page in the browser waits for you, until it gets its answer", () => {
+    for (const [asks, answered] of [
+      ["elicitation_dialog", "elicitation_response"],
+      ["elicitation_url_dialog", "elicitation_complete"],
+    ]) {
+      const waiting = run([ev("UserPromptSubmit"), ev("Notification", { notification_type: asks, message: "GitHub wants you to sign in" })]);
+      expect(waiting.state).toBe("needs_input");
+      expect(waiting.activity).toBe("GitHub wants you to sign in");
+      expect(applyHookEvent(waiting, ev("Notification", { notification_type: answered }), T0 + 5000).state).toBe("working");
+    }
+    // An answer nobody was waiting for changes nothing.
+    expect(run([ev("Stop"), ev("Notification", { notification_type: "elicitation_complete" })]).state).toBe("done");
+  });
+
+  test("a notification about another session, or of a kind we don't know, changes nothing", () => {
+    for (const type of ["agent_completed", "auth_success", "something_new"]) {
+      expect(run([ev("UserPromptSubmit"), ev("Notification", { notification_type: type })]).state).toBe("working");
+    }
+  });
+
   test("an API failure is an error with the reason", () => {
     const rec = run([ev("UserPromptSubmit"), ev("StopFailure", { error: "authentication_failed" })]);
     expect(rec.state).toBe("error");
@@ -231,6 +251,16 @@ describe("reconcile (poll of `claude agents --json`)", () => {
   test("nothing changes → nothing is reported", () => {
     const rec = reconcile(new Map(), [agent("idle")], T0)[0]!;
     expect(reconcile(records(rec), [agent("idle")], T0 + 3000)).toEqual([]);
+  });
+
+  test("with no hooks at all, the poll alone carries a session through turn after turn", () => {
+    let rec = reconcile(new Map(), [agent("busy")], T0)[0]!;
+    expect(rec.state).toBe("working");
+    rec = reconcile(records(rec), [agent("idle")], T0 + 3000)[0]!;
+    expect(rec.state).toBe("done");
+    // With hooks, busy would not wake a finished turn; here nothing else can say a new one began.
+    rec = reconcile(records(rec), [agent("busy")], T0 + 6000)[0]!;
+    expect(rec.state).toBe("working");
   });
 
   test("the same Windows folder spelled two ways is not a change", () => {

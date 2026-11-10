@@ -15,6 +15,10 @@ export interface Platform {
   openUrl(url: string): string[];
   /** A name other devices on the network can resolve to this machine, if it has one. */
   lanHostName(): Promise<string | null>;
-  /** What keeps the agent and the strip running after setup; null where setup is not built yet. */
+  /** The app registered to open `scheme://` links, null if none is, undefined where that can't be told. */
+  urlHandler(scheme: string): Promise<string | null | undefined>;
+  /** How Claude Code hooks reach the agent: through curl, or posted by Claude Code itself. */
+  hookStyle: "command" | "http";
+  /** What keeps the agent and the strip running after setup; null where that is not built yet. */
   services: "launchd" | null;
 }

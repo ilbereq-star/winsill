@@ -7,6 +7,7 @@ test("subcommands and their flags", () => {
   expect(parseCommand(["setup"])).toEqual({ name: "setup", pi: false });
   expect(parseCommand(["setup", "--pi"])).toEqual({ name: "setup", pi: true });
   expect(parseCommand(["status"])).toEqual({ name: "status" });
+  expect(parseCommand(["doctor"])).toEqual({ name: "doctor" });
   expect(parseCommand(["uninstall"])).toEqual({ name: "uninstall", purge: false });
   expect(parseCommand(["uninstall", "--purge"])).toEqual({ name: "uninstall", purge: true });
   expect(parseCommand(["--version"])).toEqual({ name: "version" });

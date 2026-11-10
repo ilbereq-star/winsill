@@ -49,22 +49,34 @@ export async function panelUrls(): Promise<string[]> {
 export interface Config {
   dataDir: string;
   dbPath: string;
+  /** Pairs the strip, or a panel, with the agent's WebSocket. */
   token: string;
+  /** Sent by the hooks in settings.json. A secret of its own: that file is the one people sync and share. */
+  hookToken: string;
 }
 
+const newToken = () => randomBytes(24).toString("base64url");
+
+/** What config.json holds, without creating it: null before the agent's first run. */
+export async function savedConfig(): Promise<{ token?: string; hookToken?: string } | null> {
+  const file = Bun.file(CONFIG_FILE);
+  return (await file.exists()) ? await file.json() : null;
+}
+
+/** The agent's config, creating the data dir and any missing token. */
 export async function loadConfig(): Promise<Config> {
   const dataDir = DATA_DIR;
   await mkdir(dataDir, { recursive: true });
 
   const path = CONFIG_FILE;
-  const file = Bun.file(path);
-  const saved: { token?: string } = (await file.exists()) ? await file.json() : {};
+  const saved = (await savedConfig()) ?? {};
 
-  if (!saved.token) {
-    saved.token = randomBytes(24).toString("base64url");
+  if (!saved.token || !saved.hookToken) {
+    saved.token ||= newToken();
+    saved.hookToken ||= newToken();
     await Bun.write(path, JSON.stringify(saved, null, 2) + "\n");
     await chmod(path, 0o600);
   }
 
-  return { dataDir, dbPath: join(dataDir, `${platform.app}.db`), token: saved.token };
+  return { dataDir, dbPath: join(dataDir, `${platform.app}.db`), token: saved.token, hookToken: saved.hookToken };
 }

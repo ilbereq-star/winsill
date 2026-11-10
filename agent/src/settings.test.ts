@@ -2,10 +2,12 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hooksInstalled, writeAtomic, writeHooks } from "./settings.ts";
+import { buildPanelHooks } from "./hooks-config.ts";
+import { installedHooks, writeAtomic, writeHooks } from "./settings.ts";
 
 let dir: string;
 let settings: string;
+const ours = buildPanelHooks("secret", "http");
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "settings-"));
@@ -19,10 +21,11 @@ test("installing hooks keeps the rest of settings.json and leaves a backup of th
   const original = JSON.stringify({ model: "opus", hooks: { Stop: [{ hooks: [{ type: "command", command: "echo mine" }] }] } });
   writeFileSync(settings, original);
 
-  expect(await writeHooks({ install: true }, settings)).toBe(true);
+  expect(await writeHooks(ours, settings)).toBe(true);
   expect(read().model).toBe("opus");
   expect(read().hooks.Stop[0]).toEqual({ hooks: [{ type: "command", command: "echo mine" }] });
-  expect(await hooksInstalled(settings)).toBe(true);
+  expect(await installedHooks(ours, settings)).toBe("current");
+  expect(await installedHooks(buildPanelHooks("another-token", "http"), settings)).toBe("outdated");
 
   const backups = readdirSync(dir).filter((name) => name.startsWith("settings.json.bak-"));
   expect(backups).toHaveLength(1);
@@ -32,16 +35,16 @@ test("installing hooks keeps the rest of settings.json and leaves a backup of th
 
 test("nothing is written or backed up when the hooks are already as asked", async () => {
   writeFileSync(settings, JSON.stringify({ model: "opus" }));
-  expect(await writeHooks({ install: false }, settings)).toBe(false);
-  await writeHooks({ install: true }, settings);
-  expect(await writeHooks({ install: true }, settings)).toBe(false);
+  expect(await writeHooks(null, settings)).toBe(false);
+  await writeHooks(ours, settings);
+  expect(await writeHooks(ours, settings)).toBe(false);
   expect(readdirSync(dir)).toHaveLength(2); // settings.json and the one backup
 });
 
 test("installing creates settings.json when there is none, and removing gives the original back", async () => {
-  expect(await writeHooks({ install: true }, settings)).toBe(true);
+  expect(await writeHooks(ours, settings)).toBe(true);
   expect(readdirSync(dir)).toEqual(["settings.json"]); // nothing to back up
-  expect(await writeHooks({ install: false }, settings)).toBe(true);
+  expect(await writeHooks(null, settings)).toBe(true);
   expect(read()).toEqual({});
 });
 

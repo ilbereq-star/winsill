@@ -1,6 +1,6 @@
 import { chmod, copyFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { CLAUDE_SETTINGS } from "./config.ts";
-import { hasPanelHooks, mergeHooks, type Settings } from "./hooks-config.ts";
+import { hooksState, mergeHooks, type PanelHooks, type Settings } from "./hooks-config.ts";
 import { platform } from "./platform/index.ts";
 
 async function readSettings(path: string): Promise<Settings> {
@@ -8,19 +8,23 @@ async function readSettings(path: string): Promise<Settings> {
   return (await file.exists()) ? await file.json() : {};
 }
 
-/** Adds or removes our hooks in Claude Code's settings.json, backing the file up first. False when nothing changed. */
-export async function writeHooks({ install }: { install: boolean }, path = CLAUDE_SETTINGS): Promise<boolean> {
+/**
+ * Puts `ours` in Claude Code's settings.json in place of any hooks of ours already there, or
+ * only removes those when `ours` is null. Backs the file up first. False when nothing changed.
+ */
+export async function writeHooks(ours: PanelHooks | null, path = CLAUDE_SETTINGS): Promise<boolean> {
   const exists = await Bun.file(path).exists();
   const before = await readSettings(path);
-  const after = mergeHooks(before, { install });
+  const after = mergeHooks(before, ours);
   if (JSON.stringify(after) === JSON.stringify(before)) return false;
   if (exists) await copyFile(path, `${path}.bak-${platform.app}-${Date.now()}`);
   await writeAtomic(path, JSON.stringify(after, null, 2) + "\n");
   return true;
 }
 
-export async function hooksInstalled(path = CLAUDE_SETTINGS) {
-  return hasPanelHooks(await readSettings(path));
+/** Whether settings.json has `ours` as they are, has other hooks of ours (an old token or style), or has none. */
+export async function installedHooks(ours: PanelHooks, path = CLAUDE_SETTINGS) {
+  return hooksState(await readSettings(path), ours);
 }
 
 /**

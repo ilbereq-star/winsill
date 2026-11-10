@@ -8,6 +8,7 @@ const MSIX_PACKAGE = /^Claude_[a-z0-9]{13}$/i;
 export function windows(home: string, env: Record<string, string | undefined>): Platform {
   const roaming = env.APPDATA || path.join(home, "AppData", "Roaming");
   const local = env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+  const system32 = path.join(env.SystemRoot || "C:\\Windows", "System32");
   const dataDir = path.join(local, "winsill");
   return {
     app: "winsill",
@@ -17,8 +18,16 @@ export function windows(home: string, env: Record<string, string | undefined>): 
     desktopDataDirs: () => desktopDataDirs(roaming, local, packageNames(path.join(local, "Packages"))),
     desktopLog: (dir) => path.join(dir, "logs", "main.log"),
     // Not `cmd /c start`: no shell parses the URL, and no console window flashes.
-    openUrl: (url) => [path.join(env.SystemRoot || "C:\\Windows", "System32", "rundll32.exe"), "url.dll,FileProtocolHandler", url],
+    openUrl: (url) => [path.join(system32, "rundll32.exe"), "url.dll,FileProtocolHandler", url],
     lanHostName: async () => null,
+    async urlHandler(scheme) {
+      if (!/^[a-z][a-z0-9+.-]*$/i.test(scheme)) return null;
+      const key = `HKCR\\${scheme}\\shell\\open\\command`;
+      const query = Bun.spawn([path.join(system32, "reg.exe"), "query", key, "/ve"], { stdout: "pipe", stderr: "ignore", windowsHide: true });
+      const output = await new Response(query.stdout).text();
+      return (await query.exited) === 0 ? parseRegDefault(output) : null;
+    },
+    hookStyle: "http",
     services: null,
   };
 }
@@ -32,6 +41,11 @@ export function desktopDataDirs(roaming: string, local: string, packages: string
     .filter((name) => MSIX_PACKAGE.test(name))
     .map((name) => path.join(local, "Packages", name, "LocalCache", "Roaming", "Claude"));
   return [path.join(roaming, "Claude"), ...msix];
+}
+
+/** The value in `reg query <key> /ve` output, whose line reads `    (Default)    REG_SZ    <value>` with a localized name. */
+export function parseRegDefault(output: string): string | null {
+  return output.match(/^\s+.+?\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/m)?.[1] ?? null;
 }
 
 function packageNames(dir: string): string[] {

@@ -2,7 +2,7 @@
  * Contract between the agent and its clients (the Perch overlay, mirrored in
  * Sources/PerchCore/Protocol.swift, and claude-panel's Pi panel), over a WebSocket at
  * ws://127.0.0.1:PANEL_PORT/ws?token=<pairing token>, or the Mac's LAN address with `--lan`.
- * The agent sends a snapshot on connect, then one message per change. The Pi panel shows sessions
+ * The agent sends a hello and a snapshot on connect, then one message per change. The Pi panel shows sessions
  * that are `live || pinned`; Perch shows pinned ones and those working or waiting on the user.
  */
 
@@ -64,7 +64,11 @@ export interface LibraryEntry {
   pinned: boolean;
 }
 
+/** Goes up when a message changes in a way an older client would misread. New message types don't count: clients ignore the ones they don't know. */
+export const PROTOCOL_VERSION = 1;
+
 export type ServerMessage =
+  | { type: "hello"; protocol: number; agent: string } // first on every connection; `agent` is the agent's version
   | { type: "snapshot"; sessions: PanelSession[]; focusedId: string | null }
   | { type: "session"; session: PanelSession }
   | { type: "removed"; id: string }

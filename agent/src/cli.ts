@@ -4,6 +4,7 @@ export type Command =
   | { name: "agent"; lan: boolean }
   | { name: "setup"; pi: boolean }
   | { name: "status" }
+  | { name: "doctor" }
   | { name: "uninstall"; purge: boolean }
   | { name: "version" }
   | { name: "help"; error?: string };
@@ -13,6 +14,7 @@ export const USAGE = `Usage: ${platform.app} <command>
   setup [--pi]         install the agent, the strip and the Claude Code hooks, and start them
                        --pi also lets a claude-panel Raspberry Pi connect over the LAN
   status               show what is installed and running
+  doctor               check everything the agent needs from Claude Code and the desktop app
   uninstall [--purge]  remove everything; --purge also deletes pins and icons without asking
   agent [--lan]        run the agent in the foreground (what setup keeps running)
   version              print the version`;
@@ -21,6 +23,7 @@ const FLAGS: Record<string, Record<string, string>> = {
   agent: { "--lan": "lan" },
   setup: { "--pi": "pi" },
   status: {},
+  doctor: {},
   uninstall: { "--purge": "purge" },
 };
 

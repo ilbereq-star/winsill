@@ -42,6 +42,27 @@ describe("SessionHub", () => {
     expect(changes.map((c) => c.type === "session" && c.session.state)).toEqual(["working", "done"]);
   });
 
+  test("the store is written only when a session changes in a way worth keeping", () => {
+    const store = new Store();
+    let saves = 0;
+    const save = store.saveSession.bind(store);
+    store.saveSession = (session) => {
+      saves++;
+      save(session);
+    };
+    const { hub } = setup(store);
+    const tool = { tool_name: "Bash", tool_input: { command: "ls" } };
+
+    hub.handleHook(ev(A, "PreToolUse", tool));
+    for (let i = 0; i < 20; i++) hub.handleHook(ev(A, "PostToolUse", tool)); // a burst that only moves lastEventAt
+    expect(saves).toBe(1);
+
+    hub.handleAgents([{ sessionId: A, cwd: "/Users/dev/claude-panel", pid: 42, status: "busy", startedAt: 0 }]); // the pid is kept too
+    hub.handleHook(ev(A, "Stop"));
+    expect(saves).toBe(3);
+    expect(store.loadSessions()).toMatchObject([{ id: A, state: "done", pid: 42 }]);
+  });
+
   test("pins get consecutive positions; unpinning resets the icon", () => {
     const { hub } = setup();
     hub.handleHook(ev(A, "Stop"));

@@ -16,6 +16,8 @@ export function mac(home: string): Platform {
       const name = (await $`scutil --get LocalHostName`.quiet().nothrow().text()).trim();
       return name ? `${name}.local` : null;
     },
+    urlHandler: async () => undefined,
+    hookStyle: "command",
     services: "launchd",
   };
 }
