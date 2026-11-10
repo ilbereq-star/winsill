@@ -1,6 +1,6 @@
 name: Test
 
-# The agent's tests on the systems it runs on. The macOS build of what ships is in release.yml.
+# The agent's and the strip's tests on the systems they run on. The macOS build of what ships is in release.yml.
 on:
   push:
     branches: [main]
@@ -9,6 +9,8 @@ on:
       - "agent/**"
       - "npm/**"
       - "shared/**"
+      - "strip/**"
+      - "Sources/PerchCore/Resources/**"
       - ".github/workflows/test.yml"
 
 permissions:
@@ -34,3 +36,15 @@ jobs:
       - name: Typecheck
         working-directory: agent
         run: bun run typecheck
+
+  # The strip is a native Windows program; its drawing and logic are tested on Windows, and the build proves it links.
+  strip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        working-directory: strip
+        run: cargo test --locked
+      - name: Build
+        working-directory: strip
+        run: cargo build --release --locked

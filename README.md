@@ -8,7 +8,7 @@ One animated pixel-art creature per Claude Code session, on the edge of your Win
 
 WinSill is a Windows port of [Perch](https://github.com/elrincondeldev/Perch) by [elrincondeldev](https://github.com/elrincondeldev), which does this on macOS. **On a Mac, use Perch.**
 
-> **Work in progress: there is nothing to install yet.** The agent that tracks your sessions runs on Windows; the strip that draws the creatures is not written.
+> **Work in progress: there is nothing to install yet.** Both parts, the agent that tracks your sessions and the strip that draws the creatures, run on Windows from source (below). There is no installer: you start each by hand.
 
 > **Not an official Anthropic project.** It is not affiliated with or endorsed by Anthropic. "Claude" is a trademark of Anthropic, PBC.
 
@@ -18,8 +18,8 @@ WinSill is a Windows port of [Perch](https://github.com/elrincondeldev/Perch) by
 |---|---|
 | Agent: tracks every session, keeps pins and icons, opens a session in the Claude desktop app | Runs from source |
 | Claude Code hooks, for instant and detailed state changes | `setup` installs them |
-| The strip with the creatures (native, in Rust) | Not started |
-| Start at login, installer | Not started |
+| The strip with the creatures (native, in Rust): states, label, menus, tray icon, collapse, left or right edge | Runs from source |
+| Start at login, installer, the strip starting the agent | Not started |
 | Phone view | Not started |
 
 The macOS code (the Swift overlay in `Sources/`, `setup` with LaunchAgents) is kept as it is in Perch. It is not built or tested in this fork.
@@ -45,6 +45,19 @@ That adds hooks to Claude Code's `settings.json`, after backing it up; `bun src/
 
 The agent listens on 127.0.0.1 only. It keeps its tokens, its database and its log in `%LOCALAPPDATA%\winsill`.
 
+## Try the strip
+
+With the agent running, in another terminal. You need [Rust](https://rustup.rs) and the Visual Studio C++ Build Tools, which Rust's installer asks for.
+
+```bash
+cd strip
+cargo run --release
+```
+
+The strip sits on the right edge of your main screen, centered above the taskbar. It shows the pinned sessions and the ones working or waiting for you; the `+` at the end pins any session from the Claude app. Click a creature to open its session, right-click it to pin it or change its look, click the arrow to collapse the strip. The tray icon has the menu (hide, left or right edge, quit). It remembers its choices in `%LOCALAPPDATA%\winsill\strip.json`.
+
+It is one 0.4 MB program, about 13 MB of memory and next to no processor time. Its drawing, layout and protocol are tested apart from Windows (`cargo test`), and `cargo run --example preview -- out.png` draws a sample strip to a PNG.
+
 ## What changes from Perch
 
 Everything that differs between the two systems is in [`agent/src/platform/`](agent/src/platform): where the agent keeps its data, where the Claude desktop app keeps its own, how a `claude://` link is opened and how hooks reach the agent.
@@ -68,6 +81,7 @@ For how the agent works, its protocol and the creature templates, see [Perch's R
 (cd agent && bun install)
 bun test agent npm               # agent, CLI and npm launcher
 (cd agent && bun run typecheck)
+(cd strip && cargo test)
 ```
 
 ## Privacy
