@@ -1,0 +1,25 @@
+[package]
+name = "winsill-strip"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The strip that draws one pixel-art creature per Claude Code session"
+publish = false
+
+[lib]
+name = "winsill_strip"
+
+[[bin]]
+name = "winsill-strip"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

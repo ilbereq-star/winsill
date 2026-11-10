@@ -4,3 +4,4 @@ CLAUDE.md
 .swiftpm/
 node_modules/
 dist/
+strip/target/
