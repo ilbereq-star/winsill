@@ -7,9 +7,12 @@
 
 pub mod appearance;
 pub mod config;
+pub mod hotkey;
+pub mod lang;
 pub mod layout;
 pub mod protocol;
 pub mod raster;
+pub mod screens;
 pub mod sessions;
 pub mod sprite;
 pub mod view;

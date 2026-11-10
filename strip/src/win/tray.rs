@@ -1,4 +1,5 @@
-//! The notification-area icon: the default creature, with the count of sessions that wait for you in its tooltip.
+//! The notification-area icon: the default creature, with the count of sessions that wait for you in its
+//! tooltip, and the balloons that tell the user a session needs them.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -8,7 +9,10 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
     BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS, DeleteObject, GetDC, ReleaseDC,
 };
-use windows::Win32::UI::Shell::{NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
+use windows::Win32::UI::Shell::{
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIIF_RESPECT_QUIET_TIME, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, GetSystemMetrics, HICON, ICONINFO, SM_CXSMICON};
 use winsill_strip::sprite::{Mood, Rgb, sprite_frame};
 
@@ -41,6 +45,28 @@ impl Tray {
         }
     }
 
+    /// A balloon from the icon, which Windows 10 shows as a notification. It stays quiet while Focus
+    /// Assist is on (`NIIF_RESPECT_QUIET_TIME`). Clicking it sends `NIN_BALLOONUSERCLICK` to the callback.
+    pub fn balloon(&mut self, title: &str, body: &str, sound: bool) {
+        let mut flags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
+        if !sound {
+            flags |= NIIF_NOSOUND;
+        }
+        let mut data = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: self.hwnd,
+            uID: ID,
+            uFlags: NIF_INFO,
+            dwInfoFlags: flags,
+            ..Default::default()
+        };
+        fill(&mut data.szInfoTitle, title);
+        fill(&mut data.szInfo, body);
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+        }
+    }
+
     fn notify(&mut self, message: windows::Win32::UI::Shell::NOTIFY_ICON_MESSAGE) {
         let mut data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -51,12 +77,18 @@ impl Tray {
             hIcon: self.icon,
             ..Default::default()
         };
-        for (slot, unit) in data.szTip.iter_mut().zip(self.tip.encode_utf16().take(127)) {
-            *slot = unit;
-        }
+        fill(&mut data.szTip, &self.tip);
         unsafe {
             let _ = Shell_NotifyIconW(message, &data);
         }
+    }
+}
+
+/// Copies `text` into a fixed field, cut to leave room for the terminator.
+fn fill(slot: &mut [u16], text: &str) {
+    let room = slot.len() - 1;
+    for (place, unit) in slot.iter_mut().zip(text.encode_utf16().take(room)) {
+        *place = unit;
     }
 }
 

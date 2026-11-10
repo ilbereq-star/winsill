@@ -18,7 +18,7 @@ WinSill is a Windows port of [Perch](https://github.com/elrincondeldev/Perch) by
 |---|---|
 | Agent: tracks every session, keeps pins and icons, opens a session in the Claude desktop app | Runs from source |
 | Claude Code hooks, for instant and detailed state changes | `setup` installs them |
-| The strip with the creatures (native, in Rust): states, label, menus, tray icon, collapse, left or right edge | Runs from source |
+| The strip with the creatures (native, in Rust): states, label, menus, tray icon, collapse, edge and monitor, notifications, shortcut, English and Spanish | Runs from source |
 | Start at login, installer, the strip starting the agent | Not started |
 | Phone view | Not started |
 
@@ -54,7 +54,17 @@ cd strip
 cargo run --release
 ```
 
-The strip sits on the right edge of your main screen, centered above the taskbar. It shows the pinned sessions and the ones working or waiting for you; the `+` at the end pins any session from the Claude app. Click a creature to open its session, right-click it to pin it or change its look, click the arrow to collapse the strip. The tray icon has the menu (hide, left or right edge, quit). It remembers its choices in `%LOCALAPPDATA%\winsill\strip.json`.
+The strip sits on the right edge of your main screen, centered above the taskbar. It shows the pinned sessions and the ones working or waiting for you; the `+` at the end pins any session from the Claude app. Click a creature to open its session, right-click it to pin it or change its look, click the arrow to collapse the strip.
+
+The tray icon has the menu:
+
+- **Notifications**: Windows tells you when a session needs a permission or an answer, or fails, and optionally when one finishes. Clicking the notification opens that session. They follow Windows' own rules, so Focus Assist silences them; "Send a test" shows whether yours get through.
+- **Hide details in labels**: the label and the notification say what state a session is in, not what it is doing (a shell command, a file).
+- **Keyboard shortcut**: `Ctrl+Alt+W` shows and hides the strip. To use another, write it in `strip.json` (`"hotkey": "ctrl+shift+f2"`; an empty string turns it off).
+- **Language**: English or Spanish, from Windows' own language unless you pick one.
+- **Edge** (left or right) and, with more than one monitor, **Monitor**.
+
+It remembers its choices in `%LOCALAPPDATA%\winsill\strip.json`.
 
 It is one 0.4 MB program, about 13 MB of memory and next to no processor time. Its drawing, layout and protocol are tested apart from Windows (`cargo test`), and `cargo run --example preview -- out.png` draws a sample strip to a PNG.
 

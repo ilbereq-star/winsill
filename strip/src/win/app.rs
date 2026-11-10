@@ -11,26 +11,30 @@ use std::mem::size_of;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint};
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Globalization::GetUserDefaultUILanguage;
+use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext};
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, RegisterHotKey, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, UnregisterHotKey};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW, IDC_ARROW, KillTimer, LoadCursorW, MSG, PostMessageW,
     PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetTimer, TranslateMessage, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP, WM_SETTINGCHANGE,
+    WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP, WM_SETTINGCHANGE,
     WM_TIMER, WNDCLASSEXW, WNDPROC, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     WINDOW_EX_STYLE,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{BOOL, PCWSTR, w};
 use winsill_strip::appearance::{Appearance, Paint};
 use winsill_strip::config::{self, Prefs};
+use winsill_strip::hotkey::Hotkey;
+use winsill_strip::lang::{Lang, Text};
 use winsill_strip::layout::{Edge, Hit, Layout, Rect};
 use winsill_strip::protocol::{ClientMessage, Icon, LibraryEntry, PALETTE, PROTOCOL_VERSION, ServerMessage, Session};
 use winsill_strip::raster::{Canvas, Corners};
-use winsill_strip::sessions::{SessionList, ago, needs_attention, status_line, summary};
+use winsill_strip::screens::{self, Screen};
+use winsill_strip::sessions::{Alert, AlertKind, Notify, SessionList, ago, needs_attention, status_line, summary};
 use winsill_strip::sprite::{Rgb, character, characters};
 use winsill_strip::view::{self, BACKDROP, LINE, MUTED, Scene, TEXT};
 
@@ -44,6 +48,9 @@ use super::window::Surface;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_APP_LINK: u32 = WM_APP + 1;
 const WM_APP_TRAY: u32 = WM_APP + 2;
+/// The tray callback's word for a click on one of our balloons.
+const NIN_BALLOONUSERCLICK: u32 = 0x0405;
+const HOTKEY_ID: i32 = 1;
 const TIMER_CLOCK: usize = 1;
 const TIMER_SLIDE: usize = 2;
 /// The creatures move four times a second.
@@ -103,6 +110,13 @@ enum Command {
     SetIcon(String, Icon),
     ToggleStrip,
     SetEdge(Edge),
+    SetMonitor(Option<String>),
+    SetLanguage(Option<Lang>),
+    SetNotify(Notify),
+    ToggleSound,
+    TestNotification,
+    TogglePrivate,
+    ToggleHotkey,
     Quit,
 }
 
@@ -134,8 +148,14 @@ struct App {
     fonts_ui: f32,
     link: Link,
     status: Status,
-    /// Set when the agent speaks a newer protocol than this strip.
-    protocol_note: Option<String>,
+    /// Set when the agent speaks a newer protocol than this strip: its version and the protocol it speaks.
+    protocol_note: Option<(String, u32)>,
+    /// Windows' own language, for when the user has not chosen one.
+    system_lang: Lang,
+    /// False when another program already holds the shortcut.
+    hotkey_held: bool,
+    /// The session the last notification was about, for when the user clicks it.
+    alert_target: Option<String>,
     list: SessionList,
     last_sent: Option<ClientMessage>,
     notice: Option<Notice>,
@@ -192,6 +212,9 @@ pub fn run() {
             link,
             status: Status::Connecting,
             protocol_note: None,
+            system_lang: Lang::from_langid(GetUserDefaultUILanguage()),
+            hotkey_held: false,
+            alert_target: None,
             list: SessionList::default(),
             last_sent: None,
             notice: None,
@@ -216,7 +239,10 @@ pub fn run() {
         };
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         SetTimer(Some(hwnd), TIMER_CLOCK, FRAME_MS as u32, None);
-        with_app(|app| app.relayout());
+        with_app(|app| {
+            app.register_hotkey();
+            app.relayout();
+        });
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
@@ -280,21 +306,33 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-/// The work area (the screen minus the taskbar) of the primary monitor, and its DPI factor.
-fn primary_monitor() -> (Rect, f32) {
-    unsafe {
-        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
-        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-        let work = if GetMonitorInfoW(monitor, &mut info).as_bool() {
-            let r = info.rcWork;
-            Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top)
-        } else {
-            Rect::new(0, 0, 1366, 728)
-        };
-        let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
-        let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-        (work, dpi_x as f32 / 96.0)
+/// Every monitor, with its work area (the monitor minus the taskbar) and DPI factor.
+fn monitors() -> Vec<Screen> {
+    unsafe extern "system" fn collect(monitor: HMONITOR, _dc: HDC, _area: *mut RECT, data: LPARAM) -> BOOL {
+        // SAFETY: `data` is the Vec that `monitors` lent for this call.
+        let list = unsafe { &mut *(data.0 as *mut Vec<Screen>) };
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+        if unsafe { GetMonitorInfoW(monitor, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) }.as_bool() {
+            let (work, full) = (info.monitorInfo.rcWork, info.monitorInfo.rcMonitor);
+            let length = info.szDevice.iter().position(|&unit| unit == 0).unwrap_or(info.szDevice.len());
+            let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+            let _ = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+            list.push(Screen {
+                name: String::from_utf16_lossy(&info.szDevice[..length]),
+                work: Rect::new(work.left, work.top, work.right - work.left, work.bottom - work.top),
+                size: (full.right - full.left, full.bottom - full.top),
+                ui: dpi_x as f32 / 96.0,
+                primary: info.monitorInfo.dwFlags & 1 != 0, // MONITORINFOF_PRIMARY
+            });
+        }
+        true.into()
     }
+    let mut list: Vec<Screen> = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(None, None, Some(collect), LPARAM(&mut list as *mut Vec<Screen> as isize));
+    }
+    list
 }
 
 fn signed_low(value: isize) -> i32 {
@@ -353,8 +391,18 @@ impl App {
             WM_APP_LINK => Handled::popup(self.on_link()),
             WM_APP_TRAY => match (lparam.0 & 0xffff) as u32 {
                 WM_LBUTTONUP | WM_RBUTTONUP => Handled::popup(Some(self.tray_menu())),
+                NIN_BALLOONUSERCLICK => {
+                    if let Some(id) = self.alert_target.clone() {
+                        self.send(ClientMessage::Open(id));
+                    }
+                    Handled::done()
+                }
                 _ => Handled::done(),
             },
+            WM_HOTKEY => {
+                self.run(Command::ToggleStrip);
+                Handled::done()
+            }
             WM_DISPLAYCHANGE | WM_DPICHANGED | WM_SETTINGCHANGE => {
                 self.relayout();
                 Handled::done()
@@ -392,7 +440,9 @@ impl App {
             self.drawn = None;
             return;
         }
-        let (work, ui) = primary_monitor();
+        let screens = monitors();
+        let (work, ui) = screens::pick(&screens, self.prefs.monitor.as_deref())
+            .map_or((Rect::new(0, 0, 1366, 728), 1.0), |screen| (screen.work, screen.ui));
         if ui != self.fonts_ui {
             self.fonts = Fonts::new(ui);
             self.fonts_ui = ui;
@@ -447,7 +497,8 @@ impl App {
         }
         self.update_label(now);
         let waiting = self.shown.iter().filter(|s| needs_attention(s)).count();
-        self.tray.set_tip(&if waiting > 0 { format!("WinSill · {waiting} waiting for you") } else { "WinSill".to_owned() });
+        let lang = self.lang();
+        self.tray.set_tip(&if waiting > 0 { lang.waiting_tip(waiting) } else { "WinSill".to_owned() });
     }
 
     fn tick(&mut self) {
@@ -474,7 +525,7 @@ impl App {
             return None;
         }
         let failure = if notice_cell.as_ref() == Some(&labelled) { self.notice.as_ref().map(|n| n.message.clone()) } else { None };
-        let (frame, edge) = (self.frame, self.prefs.edge);
+        let (frame, edge, lang) = (self.frame, self.prefs.edge, self.lang());
         let strip = self.layout.strip_rect(frame.h, edge).offset(frame.x + self.offset, frame.y);
         let paint_color = |paint: Paint| paint.rgb;
         let failed = paint_color(Paint::DANGER);
@@ -491,16 +542,16 @@ impl App {
                 };
                 Some(LabelContent {
                     name: session.name.clone(),
-                    status: failure.unwrap_or_else(|| status_line(session, now)),
+                    status: failure.unwrap_or_else(|| status_line(session, now, lang, self.prefs.private)),
                     color,
                     beside: self.layout.cell_frame(index, strip),
                     outside: frame,
                 })
             }
             Cell::Add => Some(LabelContent {
-                name: "Add a session".into(),
+                name: lang.say(Text::AddASession).into(),
                 color: if failure.is_some() { failed } else { MUTED },
-                status: failure.unwrap_or_else(|| "pin any session from the Claude app".into()),
+                status: failure.unwrap_or_else(|| lang.say(Text::PinFromApp).into()),
                 beside: self.layout.cell_frame(self.shown.len(), strip),
                 outside: frame,
             }),
@@ -509,8 +560,8 @@ impl App {
                 let refs: Vec<&Session> = self.shown.iter().collect();
                 let waiting = self.shown.iter().any(needs_attention);
                 Some(LabelContent {
-                    name: if self.prefs.collapsed { "Expand" } else { "Collapse" }.into(),
-                    status: summary(&refs),
+                    name: lang.say(if self.prefs.collapsed { Text::Expand } else { Text::Collapse }).into(),
+                    status: summary(&refs, lang),
                     color: if waiting { paint_color(Paint::ACCENT) } else { MUTED },
                     beside: tab,
                     outside: if self.prefs.collapsed { tab } else { frame },
@@ -647,7 +698,8 @@ impl App {
 
     fn send(&mut self, message: ClientMessage) {
         if self.status != Status::Online {
-            return self.show_notice(message.session_id().map(str::to_owned), "not connected to the agent".into());
+            let note = self.lang().say(Text::NotConnected).to_owned();
+            return self.show_notice(message.session_id().map(str::to_owned), note);
         }
         self.last_sent = Some(message.clone());
         self.link.send(message);
@@ -661,6 +713,7 @@ impl App {
     /// Takes in what the link thread queued. Returns a menu when the library the user asked for has arrived.
     fn on_link(&mut self) -> Option<Menu> {
         let mut menu = None;
+        let mut alerts = Vec::new();
         for event in self.link.drain() {
             match event {
                 Event::Status(status) => {
@@ -670,8 +723,7 @@ impl App {
                     }
                 }
                 Event::Message(ServerMessage::Hello { protocol, agent }) => {
-                    self.protocol_note = (protocol > PROTOCOL_VERSION)
-                        .then(|| format!("Agent {agent} speaks protocol {protocol}: update WinSill"));
+                    self.protocol_note = (protocol > PROTOCOL_VERSION).then_some((agent, protocol));
                 }
                 Event::Message(ServerMessage::Error(text)) => {
                     // The agent's errors don't name a session; they answer the last message sent.
@@ -683,9 +735,10 @@ impl App {
                         menu = Some(self.library_menu(&entries));
                     }
                 }
-                Event::Message(message) => self.list.apply(message),
+                Event::Message(message) => alerts.extend(self.list.apply(message)),
             }
         }
+        self.notify(alerts);
         self.render();
         menu
     }
@@ -704,6 +757,7 @@ impl App {
     }
 
     fn creature_menu(&self, session: &Session) -> Menu {
+        let lang = self.lang();
         let index = self.shown.iter().position(|s| s.id == session.id).unwrap_or(0);
         let (at, leftward) = self.menu_anchor(index);
         let (id, icon) = (&session.id, &session.icon);
@@ -721,60 +775,109 @@ impl App {
             .iter()
             .map(|&(name, color)| {
                 let icon = Icon { character: icon.character.clone(), color: color.to_owned() };
-                entry(name, Command::SetIcon(id.clone(), icon), color == icon_color_lower(session))
+                entry(&lang.color_name(name), Command::SetIcon(id.clone(), icon), color == icon_color_lower(session))
             })
             .collect();
         let items = vec![
             Item::Header(session.name.clone()),
-            entry("Open", Command::Open(id.clone()), false),
-            entry(if session.pinned { "Unpin" } else { "Pin" }, Command::Pin(id.clone(), !session.pinned), false),
+            entry(lang.say(Text::Open), Command::Open(id.clone()), false),
+            entry(lang.say(if session.pinned { Text::Unpin } else { Text::Pin }), Command::Pin(id.clone(), !session.pinned), false),
             Item::Separator,
-            Item::Submenu("Character".into(), characters),
-            Item::Submenu("Color".into(), colors),
+            Item::Submenu(lang.say(Text::Character).into(), characters),
+            Item::Submenu(lang.say(Text::Color).into(), colors),
         ];
         (Popup { items, at, leftward }, commands)
     }
 
     fn library_menu(&self, entries: &[LibraryEntry]) -> Menu {
+        let lang = self.lang();
         let (at, leftward) = self.menu_anchor(self.shown.len());
         let now = now_ms();
         let mut commands = Vec::new();
-        let mut items = vec![Item::Header("Pin a session".into())];
+        let mut items = vec![Item::Header(lang.say(Text::PinASession).into())];
         if entries.is_empty() {
-            items.push(Item::Header("No sessions in the Claude app".into()));
+            items.push(Item::Header(lang.say(Text::NoSessionsInApp).into()));
         }
         for entry in entries {
             commands.push(Command::Pin(entry.id.clone(), !entry.pinned));
             // After the tab, Windows lines the text up on the right.
-            let text = format!("{}\t{}", entry.name.replace('&', "&&"), ago(entry.last_activity_at, now));
+            let text = format!("{}\t{}", entry.name.replace('&', "&&"), ago(entry.last_activity_at, now, lang));
             items.push(Item::Entry { text, command: commands.len() - 1, checked: entry.pinned });
         }
         (Popup { items, at, leftward }, commands)
     }
 
     fn tray_menu(&self) -> Menu {
+        let lang = self.lang();
+        let say = |text: Text| lang.say(text).to_owned();
         let mut cursor = POINT::default();
         unsafe {
             let _ = GetCursorPos(&mut cursor);
         }
-        let count = self.shown.len();
-        let status = match self.status {
-            _ if self.protocol_note.is_some() => self.protocol_note.clone().unwrap_or_default(),
-            Status::Online => format!("Connected · {count} session{}", if count == 1 { "" } else { "s" }),
-            Status::Connecting => "Connecting to the agent…".to_owned(),
-            Status::Offline => "Agent not running · retrying".to_owned(),
-            Status::NotPaired => "Agent not set up · retrying".to_owned(),
+        let status = match (&self.protocol_note, self.status) {
+            (Some((agent, protocol)), _) => lang.newer_protocol(agent, *protocol),
+            (None, Status::Online) => lang.connected(self.shown.len()),
+            (None, Status::Connecting) => say(Text::Connecting),
+            (None, Status::Offline) => say(Text::AgentNotRunning),
+            (None, Status::NotPaired) => say(Text::AgentNotSetUp),
         };
-        let commands = vec![Command::ToggleStrip, Command::SetEdge(Edge::Left), Command::SetEdge(Edge::Right), Command::Quit];
-        let edge = |command: usize, text: &str, edge: Edge| Item::Entry { text: text.into(), command, checked: self.prefs.edge == edge };
-        let items = vec![
+
+        let mut commands = Vec::new();
+        let mut entry = |text: String, command: Command, checked: bool| {
+            commands.push(command);
+            Item::Entry { text, command: commands.len() - 1, checked }
+        };
+        let prefs = &self.prefs;
+        let mut items = vec![
             Item::Header(status),
             Item::Separator,
-            Item::Entry { text: if self.prefs.hidden { "Show strip" } else { "Hide strip" }.into(), command: 0, checked: false },
-            Item::Submenu("Edge".into(), vec![edge(1, "Left", Edge::Left), edge(2, "Right", Edge::Right)]),
-            Item::Separator,
-            Item::Entry { text: "Quit WinSill".into(), command: 3, checked: false },
+            entry(say(if prefs.hidden { Text::ShowStrip } else { Text::HideStrip }), Command::ToggleStrip, false),
+            Item::Submenu(
+                say(Text::Edge),
+                vec![
+                    entry(say(Text::Left), Command::SetEdge(Edge::Left), prefs.edge == Edge::Left),
+                    entry(say(Text::Right), Command::SetEdge(Edge::Right), prefs.edge == Edge::Right),
+                ],
+            ),
         ];
+
+        let screens = monitors();
+        if screens.len() > 1 {
+            let chosen = screens::pick(&screens, prefs.monitor.as_deref()).map(|s| s.name.clone());
+            let mut choices = vec![entry(say(Text::MainMonitor), Command::SetMonitor(None), prefs.monitor.is_none())];
+            for screen in &screens {
+                let checked = prefs.monitor.is_some() && chosen.as_deref() == Some(screen.name.as_str());
+                choices.push(entry(screen.label(), Command::SetMonitor(Some(screen.name.clone())), checked));
+            }
+            items.push(Item::Submenu(say(Text::Monitor), choices));
+        }
+
+        items.push(Item::Separator);
+        items.push(Item::Submenu(
+            say(Text::Notifications),
+            vec![
+                entry(say(Text::NotifyOff), Command::SetNotify(Notify::Off), prefs.notify == Notify::Off),
+                entry(say(Text::NotifyAttention), Command::SetNotify(Notify::Attention), prefs.notify == Notify::Attention),
+                entry(say(Text::NotifyAll), Command::SetNotify(Notify::All), prefs.notify == Notify::All),
+                Item::Separator,
+                entry(say(Text::Sound), Command::ToggleSound, prefs.sound),
+                entry(say(Text::NotifyTest), Command::TestNotification, false),
+            ],
+        ));
+        items.push(entry(say(Text::PrivateLabels), Command::TogglePrivate, prefs.private));
+        let shortcut = prefs.hotkey.unwrap_or(Hotkey::DEFAULT).label();
+        let held = if prefs.hotkey.is_some() && !self.hotkey_held { format!(" ({})", say(Text::InUse)) } else { String::new() };
+        items.push(entry(format!("{} {shortcut}{held}", say(Text::Shortcut)), Command::ToggleHotkey, prefs.hotkey.is_some()));
+        items.push(Item::Submenu(
+            say(Text::Language),
+            vec![
+                entry(say(Text::Automatic), Command::SetLanguage(None), prefs.language.is_none()),
+                entry("English".into(), Command::SetLanguage(Some(Lang::En)), prefs.language == Some(Lang::En)),
+                entry("Español".into(), Command::SetLanguage(Some(Lang::Es)), prefs.language == Some(Lang::Es)),
+            ],
+        ));
+        items.push(Item::Separator);
+        items.push(entry(say(Text::Quit), Command::Quit, false));
         (Popup { items, at: (cursor.x, cursor.y), leftward: true }, commands)
     }
 
@@ -794,7 +897,85 @@ impl App {
                 self.label_shown = None;
                 self.relayout();
             }
+            Command::SetMonitor(name) => {
+                self.prefs.monitor = name;
+                self.prefs.save(&self.data_dir);
+                self.label_shown = None;
+                self.relayout();
+            }
+            Command::SetLanguage(language) => {
+                self.prefs.language = language;
+                self.prefs.save(&self.data_dir);
+                self.label_shown = None;
+                self.render();
+            }
+            Command::SetNotify(level) => {
+                self.prefs.notify = level;
+                self.prefs.save(&self.data_dir);
+            }
+            Command::ToggleSound => {
+                self.prefs.sound = !self.prefs.sound;
+                self.prefs.save(&self.data_dir);
+            }
+            Command::TestNotification => {
+                // Windows may hold it back (Focus Assist, a full-screen app): this is how to find out.
+                let body = self.lang().say(Text::NotifyTestBody);
+                self.alert_target = None;
+                self.tray.balloon("WinSill", body, self.prefs.sound);
+            }
+            Command::TogglePrivate => {
+                self.prefs.private = !self.prefs.private;
+                self.prefs.save(&self.data_dir);
+                self.label_shown = None;
+                self.render();
+            }
+            Command::ToggleHotkey => {
+                self.prefs.hotkey = if self.prefs.hotkey.is_some() { None } else { Some(Hotkey::DEFAULT) };
+                self.prefs.save(&self.data_dir);
+                self.register_hotkey();
+            }
             Command::Quit => unsafe { PostQuitMessage(0) },
+        }
+    }
+
+    // ---- language, notifications, shortcut ------------------------------------------------------
+
+    fn lang(&self) -> Lang {
+        self.prefs.language.unwrap_or(self.system_lang)
+    }
+
+    /// Tells the user, through the tray icon, about the sessions that just changed state: one
+    /// notification for the lot, however many there are.
+    fn notify(&mut self, alerts: Vec<Alert>) {
+        let alerts: Vec<Alert> = alerts.into_iter().filter(|a| self.prefs.notify.allows(a.kind)).collect();
+        let Some(first) = alerts.first() else { return };
+        let lang = self.lang();
+        let (title, body) = if alerts.len() == 1 {
+            let detail = first.activity.as_deref().filter(|_| !self.prefs.private && first.kind != AlertKind::Done);
+            let body = match detail {
+                Some(detail) => format!("{}\n{detail}", lang.say(first.text())),
+                None => lang.say(first.text()).to_owned(),
+            };
+            (first.name.clone(), body)
+        } else {
+            let mut lines: Vec<String> = alerts.iter().take(3).map(|a| format!("{} {}", a.name, lang.say(a.text()))).collect();
+            if alerts.len() > 3 {
+                lines.push(format!("+{}", alerts.len() - 3));
+            }
+            ("WinSill".to_owned(), lines.join("\n"))
+        };
+        self.alert_target = Some(first.session_id.clone());
+        self.tray.balloon(&title, &body, self.prefs.sound);
+    }
+
+    /// Takes the shortcut the preferences name (and lets go of the one it had), and notes whether Windows gave it.
+    fn register_hotkey(&mut self) {
+        unsafe {
+            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
+            self.hotkey_held = match self.prefs.hotkey {
+                Some(hotkey) => RegisterHotKey(Some(self.hwnd), HOTKEY_ID, HOT_KEY_MODIFIERS(hotkey.modifiers()), hotkey.key).is_ok(),
+                None => false,
+            };
         }
     }
 }
