@@ -1,0 +1,36 @@
+name: Test
+
+# The agent's tests on the systems it runs on. The macOS build of what ships is in release.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "agent/**"
+      - "npm/**"
+      - "shared/**"
+      - ".github/workflows/test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install
+        working-directory: agent
+        run: bun install --frozen-lockfile
+      - name: Test
+        run: bun test agent npm
+      - name: Typecheck
+        working-directory: agent
+        run: bun run typecheck
