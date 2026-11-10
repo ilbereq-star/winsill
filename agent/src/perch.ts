@@ -1,6 +1,7 @@
 import { runAgent } from "./agent.ts";
 import { parseCommand, USAGE } from "./cli.ts";
 import { setup, uninstall } from "./install.ts";
+import { platform } from "./platform/index.ts";
 import { status } from "./status.ts";
 
 declare const PERCH_VERSION: string | undefined;
@@ -25,11 +26,11 @@ try {
       console.log(VERSION);
       break;
     case "help":
-      if (command.error) console.error(`perch: ${command.error}\n`);
+      if (command.error) console.error(`${platform.app}: ${command.error}\n`);
       console.log(USAGE);
       process.exit(command.error ? 1 : 0);
   }
 } catch (error) {
-  console.error(`perch: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`${platform.app}: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 }

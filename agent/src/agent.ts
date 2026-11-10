@@ -2,6 +2,7 @@ import { PANEL_PORT } from "../../shared/protocol.ts";
 import { HOOK_PORT, loadConfig, panelUrls } from "./config.ts";
 import { watchDesktopFocus } from "./desktop-focus.ts";
 import { SessionHub } from "./hub.ts";
+import { platform } from "./platform/index.ts";
 import { startPoller } from "./poller.ts";
 import { startServers } from "./server.ts";
 import { Store } from "./store.ts";
@@ -32,7 +33,7 @@ export async function runAgent({ lan }: { lan: boolean }) {
   });
 
   const urls = lan ? await panelUrls() : [`ws://127.0.0.1:${PANEL_PORT}/ws`];
-  console.log(`perch agent
+  console.log(`${platform.app} agent
   hooks : http://127.0.0.1:${HOOK_PORT}/hook
   panel : ${urls.join("  ")}
   data  : ${config.dbPath}

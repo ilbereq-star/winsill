@@ -4,10 +4,9 @@
  * focus simply stays unknown.
  */
 import { stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { cliSessionIdFor, DESKTOP_SESSIONS_DIR } from "./desktop-sessions.ts";
+import { cliSessionIdFor, desktopDataDir, desktopSessionsDir } from "./desktop-sessions.ts";
+import { platform } from "./platform/index.ts";
 
-const LOG = `${homedir()}/Library/Logs/Claude/main.log`;
 const FOCUS_LINE = /LocalSessions\.setFocusedSession: sessionId=(local_[A-Za-z0-9-]+|null)/g;
 
 // The app logs a null between two focused sessions; only a null that lasts means "nothing in front".
@@ -26,7 +25,7 @@ export function lastFocus(text: string): string | null | undefined {
  */
 export function watchDesktopFocus(
   onFocus: (sessionId: string | null) => void,
-  { log = LOG, sessionsDir = DESKTOP_SESSIONS_DIR, pollMs = 1000 } = {},
+  { log = platform.desktopLog(desktopDataDir()), sessionsDir = desktopSessionsDir(), pollMs = 1000 } = {},
 ) {
   let offset = 0;
   let partialLine = "";

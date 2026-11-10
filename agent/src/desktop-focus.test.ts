@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { lastFocus, watchDesktopFocus } from "./desktop-focus.ts";
-import { cliSessionIdFor, findDesktopSession, listDesktopSessions } from "./desktop-sessions.ts";
+import { cliSessionIdFor, desktopDataDir, findDesktopSession, listDesktopSessions } from "./desktop-sessions.ts";
 
 const LOCAL_A = "local_52223c18-ba45-4a92-9290-45eb61d71d5d";
 const LOCAL_B = "local_e810f230-1637-4569-a5aa-7021561c21b3";
@@ -70,6 +71,38 @@ describe("desktop sessions", () => {
     writeFileSync(log, ""); // a file, so scanning it as a dir fails with ENOTDIR
     await expect(listDesktopSessions(log)).rejects.toThrow("ENOTDIR");
     await expect(cliSessionIdFor(LOCAL_A, log)).rejects.toThrow("ENOTDIR");
+  });
+});
+
+describe("desktopDataDir, when the app's data may be in more than one folder", () => {
+  /** A data folder with one session file last written at `mtime` (epoch seconds), or with no sessions at all. */
+  function dataDir(name: string, mtime?: number) {
+    const root = join(dir, name);
+    mkdirSync(root, { recursive: true });
+    if (mtime !== undefined) {
+      mkdirSync(join(root, "claude-code-sessions", "account", "org"), { recursive: true });
+      const file = join(root, "claude-code-sessions", "account", "org", `${LOCAL_A}.json`);
+      writeFileSync(file, "{}");
+      utimesSync(file, mtime, mtime);
+    }
+    return root;
+  }
+
+  test("the only folder with sessions wins, wherever it is in the list", () => {
+    const [empty, used] = [dataDir("empty"), dataDir("used", 1000)];
+    expect(desktopDataDir([empty, used])).toBe(used);
+    expect(desktopDataDir([used, join(dir, "not-there")])).toBe(used);
+  });
+
+  test("when several have sessions, the one written last wins", () => {
+    const [stale, live] = [dataDir("stale", 1000), dataDir("live", 2000)];
+    expect(desktopDataDir([stale, live])).toBe(live);
+    expect(desktopDataDir([live, stale])).toBe(live);
+  });
+
+  test("with no sessions anywhere, as before the app's first run, it is the usual folder", () => {
+    expect(desktopDataDir([join(dir, "usual"), join(dir, "other")])).toBe(join(dir, "usual"));
+    expect(desktopDataDir([join(dir, "single")])).toBe(join(dir, "single"));
   });
 });
 

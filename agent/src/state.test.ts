@@ -232,4 +232,10 @@ describe("reconcile (poll of `claude agents --json`)", () => {
     const rec = reconcile(new Map(), [agent("idle")], T0)[0]!;
     expect(reconcile(records(rec), [agent("idle")], T0 + 3000)).toEqual([]);
   });
+
+  test("the same Windows folder spelled two ways is not a change", () => {
+    const rec = run([ev("SessionStart", { source: "startup", cwd: String.raw`c:\Users\dev\panel` })]);
+    expect(rec.cwd).toBe(String.raw`C:\Users\dev\panel`);
+    expect(reconcile(records({ ...rec, name: "Claude panel", pid: 42 }), [agent("idle", { cwd: "C:/Users/dev/panel/" })], T0 + 3000)).toEqual([]);
+  });
 });

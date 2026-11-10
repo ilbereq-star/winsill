@@ -14,7 +14,8 @@ export interface Job {
 export const LEGACY_AGENT_LABEL = "com.claude-panel.agent";
 
 const HOME = homedir();
-const DOMAIN = `gui/${process.getuid!()}`;
+/** A function: Windows has no getuid, and every command imports this file. */
+const domain = () => `gui/${process.getuid!()}`;
 // launchd starts processes with a bare PATH; the agent runs `claude`.
 const PATH = [`${HOME}/.local/bin`, `${HOME}/.bun/bin`, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
 
@@ -68,12 +69,12 @@ export async function start(job: Job) {
   await mkdir(dirname(job.log), { recursive: true });
   await Bun.write(plistPath(job.label), plist(job));
   await stop(job.label);
-  await $`launchctl bootstrap ${DOMAIN} ${plistPath(job.label)}`.quiet();
+  await $`launchctl bootstrap ${domain()} ${plistPath(job.label)}`.quiet();
 }
 
 /** Stops the job, if loaded, and waits until it is gone: bootstrapping again any sooner fails with "Input/output error". */
 export async function stop(label: string) {
-  await $`launchctl bootout ${DOMAIN}/${label}`.quiet().nothrow();
+  await $`launchctl bootout ${domain()}/${label}`.quiet().nothrow();
   for (let i = 0; i < 50; i++) {
     if (!(await isLoaded(label))) return;
     await Bun.sleep(100);
@@ -87,12 +88,12 @@ export async function remove(label: string) {
 }
 
 export async function isLoaded(label: string) {
-  return (await $`launchctl print ${DOMAIN}/${label}`.quiet().nothrow()).exitCode === 0;
+  return (await $`launchctl print ${domain()}/${label}`.quiet().nothrow()).exitCode === 0;
 }
 
 /** "running (pid 123)", "not running" or "not installed". */
 export async function describe(label: string) {
-  const info = await $`launchctl print ${DOMAIN}/${label}`.quiet().nothrow();
+  const info = await $`launchctl print ${domain()}/${label}`.quiet().nothrow();
   if (info.exitCode !== 0) return "not installed";
   const pid = info.stdout.toString().match(/^\s*pid = (\d+)$/m)?.[1];
   return pid ? `running (pid ${pid})` : "not running";

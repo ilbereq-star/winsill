@@ -7,6 +7,7 @@
  */
 import { basename } from "node:path";
 import type { SessionState } from "../../shared/protocol.ts";
+import { normalizePath } from "./paths.ts";
 
 export interface HookEvent {
   hook_event_name: string;
@@ -55,7 +56,7 @@ const ASKS_USER: Record<string, string> = {
 const MAX_ACTIVITY = 48;
 
 function newRecord(id: string, cwd: string, now: number, state: SessionState = "idle"): SessionRecord {
-  return { id, name: null, cwd, state, activity: null, live: true, pid: null, stateSince: now, lastEventAt: now };
+  return { id, name: null, cwd: normalizePath(cwd), state, activity: null, live: true, pid: null, stateSince: now, lastEventAt: now };
 }
 
 export function applyHookEvent(prev: SessionRecord | undefined, e: HookEvent, now: number): SessionRecord {
@@ -169,7 +170,7 @@ function reconcileOne(prev: SessionRecord | undefined, agent: AgentEntry, now: n
     return { ...newRecord(agent.sessionId, agent.cwd, now, polled), name: agent.name ?? null, pid: agent.pid ?? null, lastEventAt: 0 };
   }
 
-  const rec: SessionRecord = { ...prev, name: agent.name ?? prev.name, cwd: agent.cwd, pid: agent.pid ?? prev.pid, live: true };
+  const rec: SessionRecord = { ...prev, name: agent.name ?? prev.name, cwd: normalizePath(agent.cwd), pid: agent.pid ?? prev.pid, live: true };
 
   if (prev.state === "ended") return moveTo(rec, polled, null, now);
   if (now - prev.lastEventAt <= GRACE_MS) return rec;

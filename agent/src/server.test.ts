@@ -162,7 +162,7 @@ test("planOpen: deep link for desktop sessions (running or not), refuse terminal
   const desktopDir = `${root}/desktop`;
   mkdirSync(liveDir);
   mkdirSync(`${desktopDir}/account/org`, { recursive: true });
-  const dirs = { liveDir, desktopDir };
+  const dirs = { liveDir, desktopDir, openUrl: (url: string) => ["open", url] };
   try {
     expect(await planOpen("not-a-uuid", dirs)).toEqual({ ok: false, error: "invalid session id" });
 

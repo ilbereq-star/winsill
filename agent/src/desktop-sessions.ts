@@ -1,12 +1,39 @@
 /**
  * Sessions known to the Claude desktop app, from its metadata files (undocumented):
- * ~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_<id>.json.
+ * <the app's data folder>/claude-code-sessions/<account>/<org>/local_<id>.json.
  * They outlive the CLI process, which the app stops when a session sits idle.
  */
-import { homedir } from "node:os";
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { normalizePath } from "./paths.ts";
+import { platform } from "./platform/index.ts";
 import { isSessionId } from "./protocol-guard.ts";
 
-export const DESKTOP_SESSIONS_DIR = `${homedir()}/Library/Application Support/Claude/claude-code-sessions`;
+const SESSIONS = "claude-code-sessions";
+const SESSION_FILES = "*/*/local_*.json";
+
+/**
+ * The folder the desktop app keeps its data in. On Windows it can be in more than one place:
+ * the one in use is the one with sessions, or the one whose sessions changed last if several have.
+ */
+export function desktopDataDir(candidates = platform.desktopDataDirs()): string {
+  if (candidates.length === 1) return candidates[0]!;
+  const used = candidates.filter((dir) => existsSync(join(dir, SESSIONS)));
+  if (used.length <= 1) return used[0] ?? candidates[0]!;
+  return used.map((dir) => ({ dir, at: lastChange(join(dir, SESSIONS)) })).sort((a, b) => b.at - a.at)[0]!.dir;
+}
+
+export function desktopSessionsDir() {
+  return join(desktopDataDir(), SESSIONS);
+}
+
+function lastChange(sessionsDir: string): number {
+  let newest = 0;
+  for (const path of new Bun.Glob(SESSION_FILES).scanSync({ cwd: sessionsDir, absolute: true })) {
+    newest = Math.max(newest, statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+  }
+  return newest;
+}
 
 export interface DesktopSession {
   /** The app's id, used in claude:// links. */
@@ -20,21 +47,21 @@ export interface DesktopSession {
 }
 
 /** Every desktop session, most recently active first. */
-export async function listDesktopSessions(dir = DESKTOP_SESSIONS_DIR): Promise<DesktopSession[]> {
+export async function listDesktopSessions(dir = desktopSessionsDir()): Promise<DesktopSession[]> {
   const sessions: DesktopSession[] = [];
-  for await (const path of scan("*/*/local_*.json", dir)) {
+  for await (const path of scan(SESSION_FILES, dir)) {
     const session = parse(await Bun.file(path).json().catch(() => null));
     if (session) sessions.push(session);
   }
   return sessions.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 }
 
-export async function findDesktopSession(sessionId: string, dir = DESKTOP_SESSIONS_DIR): Promise<DesktopSession | undefined> {
+export async function findDesktopSession(sessionId: string, dir = desktopSessionsDir()): Promise<DesktopSession | undefined> {
   return (await listDesktopSessions(dir)).find((s) => s.sessionId === sessionId);
 }
 
 /** CLI session id of a desktop `local_…` session. */
-export async function cliSessionIdFor(localId: string, dir = DESKTOP_SESSIONS_DIR): Promise<string | null> {
+export async function cliSessionIdFor(localId: string, dir = desktopSessionsDir()): Promise<string | null> {
   for await (const path of scan(`*/*/${localId}.json`, dir)) {
     const session = parse(await Bun.file(path).json().catch(() => null));
     if (session) return session.sessionId;
@@ -58,7 +85,7 @@ function parse(meta: Record<string, unknown> | null): DesktopSession | null {
     localId: meta.sessionId,
     sessionId: meta.cliSessionId,
     title: typeof meta.title === "string" ? meta.title : null,
-    cwd: typeof meta.cwd === "string" ? meta.cwd : "",
+    cwd: typeof meta.cwd === "string" ? normalizePath(meta.cwd) : "",
     lastActivityAt: typeof meta.lastActivityAt === "number" ? meta.lastActivityAt : 0,
     archived: meta.isArchived === true,
   };

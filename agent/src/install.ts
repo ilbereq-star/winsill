@@ -5,6 +5,7 @@ import { chmod, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { BIN_DIR, CLAUDE_PANEL_CONFIG, CLAUDE_PANEL_DB, CLAUDE_SETTINGS, CONFIG_FILE, DATA_DIR, LOG_DIR, loadConfig, panelUrls } from "./config.ts";
 import { isLoaded, LEGACY_AGENT_LABEL, perchJobs, plistPath, remove, start, stop } from "./launchd.ts";
+import { platform } from "./platform/index.ts";
 import { writeHooks } from "./settings.ts";
 import { Store } from "./store.ts";
 
@@ -12,6 +13,7 @@ import { Store } from "./store.ts";
 const SHIPPED = ["perch", "perch-overlay", "Perch_PerchCore.bundle"];
 
 export async function setup({ pi }: { pi: boolean }) {
+  requireServices("setup");
   const source = dirname(process.execPath);
   const missing = SHIPPED.filter((name) => !existsSync(`${source}/${name}`));
   if (missing.length > 0) {
@@ -52,6 +54,12 @@ export async function setup({ pi }: { pi: boolean }) {
   }
 }
 
+/** Everything here drives launchd and ships macOS binaries; the Windows installer comes with its strip. */
+function requireServices(command: string) {
+  if (platform.services === "launchd") return;
+  throw new Error(`${command} is not available on this system yet; start the agent with \`${platform.app} agent\``);
+}
+
 /** Each item lands under a temporary name, then replaces the old one in a single rename. */
 async function copyInto(source: string, target: string) {
   await mkdir(target, { recursive: true });
@@ -65,6 +73,7 @@ async function copyInto(source: string, target: string) {
 }
 
 export async function uninstall({ purge }: { purge: boolean }) {
+  requireServices("uninstall");
   for (const job of perchJobs({ binDir: BIN_DIR, logDir: LOG_DIR }, { lan: false })) await remove(job.label);
   await $`pkill -f ${`${BIN_DIR}/`}`.quiet().nothrow();
   const hooksRemoved = await writeHooks({ install: false });
